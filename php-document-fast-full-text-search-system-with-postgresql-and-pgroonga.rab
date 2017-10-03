@@ -1,0 +1,513 @@
+= PostgreSQLとPGroongaで\n作る\nPHPマニュアル\n高速全文検索システム
+
+: author
+   須藤功平
+: institution
+   クリアコード
+: content-source
+   PHPカンファレンス2017
+: date
+   2017-10-08
+: start-time
+   2017-10-08T11:00:00
+: end-time
+   2017-10-08T12:00:00
+: theme
+   .
+= PostgreSQLと全文検索
+
+  * LIKE：組込機能
+  * textsearch：組込機能
+  * pg_trgm：標準添付
+    * アーカイブには含まれている
+    * 別途インストールすれば使える
+
+= LIKE
+
+  * 少ないデータ
+    * 十分実用的
+    * 400文字×20万件くらいなら1秒とか
+  * 少なくないデータ
+    * 性能問題アリ
+
+= textsearch
+
+  * インデックスを作るので速い
+  * 言語毎にモジュールが必要
+    * 英語やフランス語などは組込
+    * 日本語は別途必要
+  * 日本語用モジュール
+    * 公式にはメンテナンスされていない\n
+      (('note:forkして動くようにしている人はいる'))
+
+= pg_trgm
+
+  * インデックスを作るので速い
+    * 注：ヒット件数が増えると遅い
+    * 注：テキスト量が多いと遅い
+    * 注：1,2文字の検索は遅い(('note:（米・日本）'))
+
+  * 日本語を使うにはひと工夫必要
+    * C.UTF-8を使う
+    * ソースを変更してビルド
+
+= プラグイン
+
+  * pg_bigm
+    * pg_trgmの日本語対応強化版
+  * PGroonga
+    * 本気の全文検索エンジンを利用
+    * 速いし日本語もバッチリ！
+
+= ベンチマーク：pg_bigm
+
+  # image
+  # src = images/search-pg-bigm.pdf
+  # relative_height = 100
+
+= ベンチマーク：PGroonga
+
+  # image
+  # src = images/search-pgroonga-pg-bigm.pdf
+  # relative_height = 100
+
+= よし！
+
+  * PostgreSQLとPGroongaを使って
+  * 高速日本語全文検索サービスを
+  * PHPで作ろう！
+
+= PHP document search
+
+  # image
+  # src = images/php-document-search.png
+  # relative_height = 100
+
+= 機能
+
+  * 検索キーワードハイライト
+  * キーワード周辺テキスト表示
+  * オートコンプリート
+    * ローマ字対応（seiki→正規表現）
+
+= 作り方：ツール
+
+  * フレームワーク
+    * Laravel
+  * RDBMS
+    * PostgreSQL
+  * 高速日本語全文検索機能
+    * PGroonga
+
+= 作り方：インストール
+
+  * Laravel
+    * 省略
+  * PostgreSQL
+    * パッケージで
+  * PGroonga
+    * パッケージで\n
+      (('tag:x-small:https://pgroonga.github.io/ja/install/'))
+
+= 初期化：Laravel
+
+  # coderay console
+
+  % laravel new php-document-search
+  % cd php-document-search
+  % editor .env
+
+= 初期化：データベース
+
+  # coderay console
+
+  % sudo -u postgres -H \
+      createdb php_document_search
+
+= 初期化：PGroonga
+
+  # rouge sql
+  -- ↓を実行する必要がある
+  CREATE EXTENSION pgroonga;
+
+= 初期化：PGroonga
+
+(('tag:center'))
+マイグレーションファイル作成
+
+  # coderay console
+
+  % php artisan \
+      make:migration enable_pgroonga
+
+= マイグレーション
+
+  # coderay php
+
+  public function up()
+  {
+    DB::statement("CREATE EXTENSION pgroonga;");
+  }
+
+  public function down()
+  {
+    DB::statement("DROP EXTENSION pgroonga;");
+  }
+
+= モデル作成
+
+  * ドキュメントはモデル
+    * 名前：((%Entry%))
+    * 1ページ1インスタンス
+
+= モデル作成
+
+  # coderay console
+
+  % php artisan \
+      make:model \
+        --migration \
+        --controller \
+        --resource \
+        Entry
+
+= マイグレーション
+
+  # coderay php
+
+  public function up() {
+    Schema::create('entries', function ($table) {
+      $table->increments('id');
+      $table->text('url');
+      $table->text('title');
+      $table->text('content');
+      // PGroonga用インデックス。デフォルトで全文検索用。
+      // 主キー（id）も入れるのが大事！スコアー取得に必要。
+      $table->index(
+         ['id', 'title', 'content'], null, 'pgroonga');
+    });
+  }
+
+= データ登録
+
+  (1) PHPのドキュメントを\n
+      ローカルで生成
+      * PHPのドキュメントの作り方\n
+        http://doc.php.net/tutorial/
+      * フィードバックチャンスがいろいろあったよ！（後述）
+  (2) ページ毎にPostgreSQLに挿入
+
+= コマンド作成
+
+  # coderay console
+
+  % php artisan \
+      make:command \
+        --command=doc:register \
+        RegisterDocuments
+
+= 登録コマンド実装（一部）
+
+  # coderay php
+
+  public function handle()
+  {
+    foreach (glob("public/doc/*.html") as $html_path) {
+      $document = new \DOMDocument();
+      @$document->loadHTMLFile($html_path);
+      $xpath = new \DOMXPath($document);
+      $entry = new Entry();
+      $entry->url = "/doc/" . basename($html_path);
+      // XPathでテキスト抽出
+      $this->extract_title($entry, $xpath);
+      $this->extract_content($entry, $xpath);
+      $entry->save();
+    }
+  }
+
+= 登録
+
+  # coderay console
+
+  % php artisan doc:register
+
+= 検索用コントローラー
+
+  # coderay php
+
+  public function index(Request $request)
+  {
+    $query = $request['query'];
+    $entries = Entry::query()
+      // ↓はモデルに作る（後述）
+      ->fullTextSearch($query)
+      ->limit(10)
+      ->get();
+    return view('entry.search.index',
+                [
+                  'entries' => $entries,
+                  'query' => $query,
+                ]);
+  }
+
+= 検索対象モデル
+
+  # coderay php
+
+  public function
+    scopeFullTextSearch($query, $search_query)
+  {
+    if ($search_query) {
+      return ...; // クエリーがあったら検索
+    } else {
+      return ...; // なかったら適当に返す（省略）
+    }
+  }
+
+= 検索対象モデル：検索
+
+  # coderay php
+
+  return $query
+    ->select('id', 'url')
+    // 適合度をスコアーとして返す
+    ->selectRaw('pgroonga_score(entries) AS score')
+    // キーワードハイライト
+    ->highlightHTML('title', $search_query)
+    // キーワード周辺のテキスト（キーワードハイライト付き）
+    ->snippetHTML('content', $search_query)
+    // タイトルと本文を全文検索（後で補足）
+    ->whereRaw('title &@~ ? OR content &@~ ?',
+               [$search_query, $search_query])
+    // それっぽい文書の順に返す
+    ->orderBy('score', 'DESC');
+
+= キーワードハイライト
+
+  # coderay php
+
+  public function scopeHighlightHTML($query,
+                                     $column,
+                                     $search_query)
+  {
+    return $query
+      // PGroonga提供ハイライト関数
+      ->selectRaw("pgroonga_highlight_html($column, " .
+      // PGroonga提供クエリーからキーワードを抽出する関数
+                  "pgroonga_query_extract_keywords(?)) " .
+                  "AS highlighted_$column",
+                  [$search_query]);
+  }
+
+= 検索結果
+
+  # coderay php
+
+  <div class="entries">
+    @foreach ($entries as $entry)
+      <a href="{{ $entry->url }}">
+        <h4>
+          {{-- マークアップ済み！ --}}
+          {!! $entry->highlighted_title !!}
+          <span class="score">{{ $entry->score }}</span>
+        </h4>
+        {{-- 周辺テキストはtext[]（後で補足） --}}
+        @foreach ($entry->content_snippets as $snippet)
+          <pre class="snippet">{!! $snippet !!}</pre>
+        @endforeach
+      </a>
+    @endforeach
+  </div>
+
+= 検索対象モデル：配列
+
+  # coderay php
+
+  public function getContentSnippetsAttribute($value)
+  { // PostgreSQLは配列をサポートしているがPDOは未サポート
+    // '["...","..."]'という文字列になるのでそれを配列に変換
+    // ※これは回避策なのでPDOに配列サポートを入れたい！
+    return array_map(
+      function ($e) {
+        // 「"」が「\"」になっているので戻す
+        return preg_replace('/\\\\(.)/', '$1', $e);
+      },
+      explode('","', substr($value, 2, -2)));
+  }
+
+= 高速日本語全文検索！
+
+  # image
+  # src = images/php-document-search-search.png
+  # relative_height = 100
+
+= オートコンプリート
+
+  * 必要なもの
+    * 候補用テーブル
+    * 候補のヨミガナ（カタカナ）
+    * PGroonga!!!
+
+= モデル作成
+
+  # coderay console
+
+  % php artisan \
+      make:model \
+        --migration \
+        --controller \
+        --resource \
+        Term
+
+= マイグレーション：カラム
+
+  # coderay php
+
+  public function up()
+  {
+    Schema::create('terms', function ($table) {
+      $table->increments('id');
+      $table->text('term');
+      $table->text('label');
+      $table->text('reading'); // 本当は配列にしたい
+      $table->timestamps();
+      // インデックス定義（後述）
+    });
+  }
+
+= マイグレーション\nインデックス
+
+  # coderay php
+
+  $table->index([
+    // ヨミガナに対する前方一致RK検索用
+    DB::raw('reading pgroonga_text_term_search_ops_v2'),
+  ], null, 'pgroonga');
+  // 候補に対する全文検索用（中間一致用）
+  $table->index([
+    // TODO: ゆるい全文検索
+    DB::raw('term')
+  ], null, 'pgroonga');
+
+= 前方一致RK検索
+
+  * 日本語特化の前方一致検索
+    * ローマ字・ひらがな・カタカナで\n
+      カタカナを前方一致検索できる
+    * gy→ギュウニュウ
+    * ぎ→ギュウニュウ
+    * ギ→ギュウニュウ
+
+= 候補モデル：検索
+
+  # coderay php
+
+  public function scopeComplete($query, $search_query)
+  {
+    return $query
+      ->select("label")
+      ->highlightHTML('label', $search_query)
+                 // 前方一致RK検索
+      ->whereRaw("reading &^~ :query OR " .
+                 // ゆるい全文検索
+                 "term &@~ :query",
+                 ["query" => $search_query])
+      ->orderBy("label")
+      ->limit(10);
+  }
+
+= コントローラー
+
+  # coderay php
+
+  public function index(Request $request)
+  {
+    $query = $request["query"];
+    // モデルに実装した検索処理を呼び出し
+    $terms = Term::query()->complete($query);
+    $data = [];
+    foreach ($terms->get() as $term) {
+      $data[] = [
+        "value" => $term->label,
+        "label" => $term->highlighted_label,
+      ];
+    }
+    // JSONで候補を返す
+    return response()->json($data);
+  }
+
+= UI
+
+  # coderay javascript
+
+  $('#query').autocomplete({
+    source: function(request, response) {
+      $.ajax({
+        url: "/terms/", // コントローラー呼び出し
+        dataType: "json",
+        data: {query: this.term},
+        success: response
+      });
+    }
+  }).autocomplete("instance")._renderItem = function(ul, item) {
+    return $("<li>")
+      .attr("data-value", item.value) // 候補には生データを使う
+      .append(item.label) // ハイライトしたデータを表示
+      .appendTo(ul);
+  };
+
+= オートコンプリート！
+
+  # image
+  # src = images/php-document-search.png
+  # relative_height = 100
+
+= まとめ
+
+  * PGroongaを使えば…
+    * 高速日本語全文検索サービスを…
+    * ((*PHP*))で簡単に作れる！
+  * PHP document searchのソース
+    * (('tag:x-small'))https://github.com/kou/php-document-search
+
+= PostgreSQL→MySQL
+
+  * PHP+MySQL+Mroongaでも簡単！
+  * Groongaではじめる全文検索
+    * https://grnbook-ja.tumblr.com/
+    * 著者：北市真
+    * PHP+Mroonga入門の電子書籍
+    * 今はまだ無料！
+
+= PHP document search
+
+  * だれかPHP document searchを\n
+    メンテナンスしませんか？
+    * 普通に便利じゃないかと！
+    * 複数バージョン対応とか
+    * 複数言語対応とか
+
+= PHPの開発へ参加！
+
+  * PHPの開発に参加しませんか？
+    * PDOのPostgreSQL対応強化とか
+    * ドキュメントまわりとか
+  * (('wait'))やりたいけど自分はムリそう…
+    * そんなことはないんですよ！
+
+= OSS Gate
+
+  * OSS Gate
+    * OSS開発者を増やす取り組み
+  * OSS Gateワークショップ
+    * OSS開発未経験者を経験者にする\n
+      ワークショップ
+    * PHPもOSS！
+
+= ワークショップ
+
+  * このカンファレンス内で開催！
+    * 午後にこの部屋で開催(('note:（2時間45分）'))
+    * 参加希望者は私に声をかけて！
+  * PHP関連のOSSの開発に\n
+    参加する人を増やそう！

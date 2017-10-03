@@ -1,0 +1,25 @@
+---
+id: php-conference-2017
+base_name: php-document-fast-full-text-search-system-with-postgresql-and-pgroonga
+tags:
+- rabbit
+- php
+- postgresql
+- pgroonga
+presentation_date: '2017-10-08'
+version: 2017.10.08.0
+licenses:
+- CC BY 3.0
+- CC BY-SA 4.0
+slideshare_id: phpconference2017
+speaker_deck_id: 
+ustream_id: 
+vimeo_id: 
+youtube_id: 
+author:
+  markup_language: :rd
+  name: Kouhei Sutou
+  email: kou@clear-code.com
+  rubygems_user: kou
+  slideshare_user: kou
+  speaker_deck_user: 
