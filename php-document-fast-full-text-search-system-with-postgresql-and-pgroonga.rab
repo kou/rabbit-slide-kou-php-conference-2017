@@ -15,6 +15,65 @@
 : theme
    .
 
+= PHPマニュアル
+
+  # image
+  # src = images/php-manual-ja.png
+  # relative_width = 80
+
+(('tag:center'))
+http://php.net/manual/ja/
+
+= @で検索
+
+  # image
+  # src = images/php-manual-ja-search-by-at.png
+  # relative_width = 80
+
+(('tag:center'))
+@：エラー制御演算子
+
+= @でnot found
+
+  # image
+  # src = images/php-manual-ja-search-by-at-not-found.png
+  # relative_width = 80
+
+(('tag:center'))
+関数・クラス・例外のみ検索対象
+
+= 全文検索あり！
+
+  # image
+  # src = images/php-manual-ja-full-text-search-link.png
+  # relative_width = 80
+
+(('tag:center'))
+Googleカスタム検索
+
+= @でnot found
+
+  # image
+  # src = images/php-manual-ja-full-text-search-by-at-not-found.png
+  # relative_width = 80
+
+(('tag:center'))
+Googleは自然言語向けだから
+
+= マニュアル検索
+
+  * 自然言語向けと傾向が違う
+    * @：自然言語ではノイズ\n
+      (('note:特に日本語ではノイズ'))
+    * @：マニュアルでは重要語
+  * プログラミング言語用の\n
+    チューニングが必要
+    * 🔍探している情報が見つかる！
+
+= マニュアル\n検索システムの\n作り方
+
+= PHP\n+\nPostgreSQL
+
 = PostgreSQLと全文検索
 
   * LIKE：組込機能
@@ -30,6 +89,21 @@
     * 400文字×20万件くらいなら1秒とか
   * 少なくないデータ
     * 性能問題アリ
+
+= PHPマニュアルのデータ
+
+  # RT
+
+  件数, 13095
+  平均文字数, 871文字
+
+= PHPマニュアルでLIKE
+
+  * 👍速度は十分実用的
+    * (({LIKE '%@%'}))で約100ms
+  * 👎それっぽい順のソート不可
+    * 全文検索ではソート順が重要
+    * ユーザーは先頭n件しか見ない
 
 = textsearch
 
@@ -56,9 +130,11 @@
 
   * pg_bigm
     * pg_trgmの日本語対応強化版
+    * それっぽい順の並び替え不可
   * PGroonga
     * 本気の全文検索エンジンを利用
     * 速いし日本語もバッチリ！
+    * それっぽい順の並び替えも可
 
 = ベンチマーク：pg_bigm
 
@@ -72,24 +148,37 @@
   # src = images/search-pgroonga-pg-bigm.pdf
   # relative_height = 100
 
-= よし！
+= PostgreSQLで全文検索システム
 
-  * PostgreSQLとPGroongaを使って
-  * 高速日本語全文検索サービスを
-  * PHPで作ろう！
+  * PostgreSQLで全文検索
+    * PGroongaがベスト！💯
+  * PGroonga
+    * 高速
+    * 日本語対応
+    * それっぽい順でソート可
 
 = PHP document search
 
   # image
   # src = images/php-document-search.png
-  # relative_height = 100
+  # relative_height = 80
 
-= 機能
+(('tag:center'))
+PHP + PostgreSQL + PGroonga
 
+= 基本機能
+
+  * 高速全文検索＋ソート
   * 検索キーワードハイライト
   * キーワード周辺テキスト表示
+
+= 高度な機能
+
   * オートコンプリート
     * ローマ字対応（seiki→正規表現）
+  * 類似マニュアル検索
+  * 同義語展開
+    * 「@」→「@ OR エラー制御演算子」
 
 = 作り方：ツール
 
@@ -148,6 +237,7 @@
   public function up()
   {
     DB::statement("CREATE EXTENSION pgroonga;");
+    // CREATE EXTENSION IF NOT EXISTS ...の方がよい
   }
 
   public function down()
@@ -195,7 +285,7 @@
       ローカルで生成
       * PHPのドキュメントの作り方\n
         http://doc.php.net/tutorial/
-      * フィードバックチャンスがいろいろあったよ！（後述）
+      * フィードバックチャンスがいろいろあったよ！
   (2) ページ毎にPostgreSQLに挿入
 
 = コマンド作成
@@ -277,10 +367,10 @@
     ->highlightHTML('title', $search_query)
     // キーワード周辺のテキスト（キーワードハイライト付き）
     ->snippetHTML('content', $search_query)
-    // タイトルと本文を全文検索（後で補足）
+    // タイトルと本文を全文検索（タイトルの方が重要）
     ->whereRaw('title &@~ ? OR content &@~ ?',
-               [$search_query, $search_query])
-    // それっぽい文書の順に返す
+               [">($search_query)", $search_query])
+    // それっぽい順に返す
     ->orderBy('score', 'DESC');
 
 = キーワードハイライト
@@ -376,19 +466,30 @@
     });
   }
 
-= マイグレーション\nインデックス
+= マイグレーション\nインデックス1
 
   # coderay php
 
   $table->index([
     // ヨミガナに対する前方一致RK検索用
-    DB::raw('reading pgroonga_text_term_search_ops_v2'),
-  ], null, 'pgroonga');
-  // 候補に対する全文検索用（中間一致用）
-  $table->index([
-    // TODO: ゆるい全文検索
-    DB::raw('term')
-  ], null, 'pgroonga');
+    // RK：ローマ字・カナ（後述）
+    DB::raw("reading " .
+      "pgroonga_text_term_search_ops_v2"),
+  ], null, "pgroonga");
+
+= マイグレーション\nインデックス2
+
+  # coderay php
+
+  // 候補に対するゆるい全文検索用（中間一致用）
+  DB::statement(
+    "CREATE INDEX terms_term_index " .
+    "ON terms " .
+    "USING pgroonga (term) " .
+    // ↓がポイント
+    // ※LaravelがWITHを未サポートなのでSQLで書いている
+    // ※回避策なのでLaravelにWITHサポートを入れたい！
+    "WITH (tokenizer='TokenBigramSplitSymbolAlphaDigit')");
 
 = 前方一致RK検索
 
@@ -407,7 +508,7 @@
   {
     return $query
       ->select("label")
-      ->highlightHTML('label', $search_query)
+      ->highlightHTML("label", $search_query)
                  // 前方一致RK検索
       ->whereRaw("reading &^~ :query OR " .
                  // ゆるい全文検索
@@ -463,15 +564,58 @@
   # src = images/php-document-search.png
   # relative_height = 100
 
+= 類似文書検索
+
+= 同義語展開
+
+= 開発者募集！
+
+  * 公式検索システム置き換え！？
+    * 必要そう：複数バージョン対応
+    * 必要そう：複数言語対応
+  * マニュアルをさらによく！
+    * 検索を便利に！→ユーザー増加！
+    * →フィードバックする人も増加！
+
+= 使いたい！
+
+  * WEICさんが運用予定！
+    * 月内リリース予定
+    * URL: http://phpdocs.weic.co.jp/
+  * 宣伝(('note:（運用スポンサーの宣伝枠）'))
+    * PHPエンジニア大募集！
+    * 業務時間内にこれの開発もできる!?
+
+= PHP document search情報
+
+  * ソース
+    * (('tag:x-small'))https://github.com/kou/php-document-search
+  * OSS
+    * MITライセンス
+
 = まとめ
 
   * PGroongaを使えば…
     * 高速日本語全文検索サービスを…
     * ((*PHP*))で簡単に作れる！
-  * PHP document searchのソース
-    * (('tag:x-small'))https://github.com/kou/php-document-search
+  * 開発者募集！
+  * サービス提供予定 by WEIC！
+    * URL: http://phpdocs.weic.co.jp/
 
-= PostgreSQL→MySQL
+= MySQLでもできる？
+
+  * MySQL・PostgreSQLだけで作る\n
+    高速でリッチな\n
+    全文検索システム
+    * db tech showcase Tokyo 2017の資料
+    * PGroongaの代わりにMroongaを使う
+    * SQLでの書き方だけでPHPの話はない
+
+(('tag:center'))
+(('tag:xx-small'))
+https://slide.rabbit-shocker.org/authors/kou/db-tech-showcase-tokyo-2017/
+
+= PHP+MySQL+Mroonga入門
 
   * PHP+MySQL+Mroongaでも簡単！
   * Groongaではじめる全文検索
@@ -480,20 +624,13 @@
     * PHP+Mroonga入門の電子書籍
     * 今はまだ無料！
 
-= PHP document search
-
-  * だれかPHP document searchを\n
-    メンテナンスしませんか？
-    * 普通に便利じゃないかと！
-    * 複数バージョン対応とか
-    * 複数言語対応とか
-
 = PHPの開発へ参加！
 
   * PHPの開発に参加しませんか？
-    * PDOのPostgreSQL対応強化とか
-    * ドキュメントまわりとか
-  * (('wait'))やりたいけど自分はムリそう…
+    * 例：PDO/LaravelのPostgreSQL関連
+    * 例：マニュアル生成まわり
+    * 例：PHP document search関連
+  * やりたいけど自分はムリそう…
     * そんなことはないんですよ！
 
 = OSS Gate
@@ -512,3 +649,5 @@
     * 参加希望者は私に声をかけて！
   * PHP関連のOSSの開発に\n
     参加する人を増やそう！
+    * 今回だけで終わりにしないで\n
+      ((*今回を始まりにしたい！*))
