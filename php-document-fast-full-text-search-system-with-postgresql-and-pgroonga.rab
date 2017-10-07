@@ -267,15 +267,16 @@ PHP + PostgreSQL + PGroonga
   # coderay php
 
   public function up() {
-    Schema::create('entries', function ($table) {
-      $table->increments('id');
-      $table->text('url');
-      $table->text('title');
-      $table->text('content');
-      // PGroonga用インデックス。デフォルトで全文検索用。
-      // 主キー（id）も入れるのが大事！スコアー取得に必要。
+    Schema::create("entries", function ($table) {
+      $table->increments("id");
+      $table->text("url");
+      $table->text("title");
+      $table->text("content");
+      // PGroongaインデックス（デフォルト：全文検索用）
+      // 主キー（id）も入れるのが大事！
+      // それっぽい順のソートで必要
       $table->index(
-         ['id', 'title', 'content'], null, 'pgroonga');
+         ["id", "title", "content"], null, "pgroonga");
     });
   }
 
@@ -328,16 +329,16 @@ PHP + PostgreSQL + PGroonga
 
   public function index(Request $request)
   {
-    $query = $request['query'];
+    $query = $request["query"];
     $entries = Entry::query()
       // ↓はモデルに作る（後述）
       ->fullTextSearch($query)
       ->limit(10)
       ->get();
-    return view('entry.search.index',
+    return view("entry.search.index",
                 [
-                  'entries' => $entries,
-                  'query' => $query,
+                  "entries" => $entries,
+                  "query" => $query,
                 ]);
   }
 
@@ -360,18 +361,18 @@ PHP + PostgreSQL + PGroonga
   # coderay php
 
   return $query
-    ->select('id', 'url')
-    // 適合度をスコアーとして返す
-    ->selectRaw('pgroonga_score(entries) AS score')
+    ->select("id", "url")
+    // それっぽさの度合い
+    ->selectRaw("pgroonga_score(entries) AS score")
     // キーワードハイライト
-    ->highlightHTML('title', $search_query)
+    ->highlightHTML("title", $search_query)
     // キーワード周辺のテキスト（キーワードハイライト付き）
-    ->snippetHTML('content', $search_query)
+    ->snippetHTML("content", $search_query)
     // タイトルと本文を全文検索（タイトルの方が重要）
-    ->whereRaw('title &@~ ? OR content &@~ ?',
+    ->whereRaw("title &@~ ? OR content &@~ ?",
                [">($search_query)", $search_query])
     // それっぽい順に返す
-    ->orderBy('score', 'DESC');
+    ->orderBy("score", "DESC");
 
 = キーワードハイライト
 
@@ -456,11 +457,11 @@ PHP + PostgreSQL + PGroonga
 
   public function up()
   {
-    Schema::create('terms', function ($table) {
-      $table->increments('id');
-      $table->text('term');
-      $table->text('label');
-      $table->text('reading'); // 本当は配列にしたい
+    Schema::create("terms", function ($table) {
+      $table->increments("id");
+      $table->text("term");
+      $table->text("label");
+      $table->text("reading"); // 本当は配列にしたい
       $table->timestamps();
       // インデックス定義（後述）
     });
@@ -542,7 +543,7 @@ PHP + PostgreSQL + PGroonga
 
   # coderay javascript
 
-  $('#query').autocomplete({
+  $("#query").autocomplete({
     source: function(request, response) {
       $.ajax({
         url: "/terms/", // コントローラー呼び出し
@@ -564,9 +565,225 @@ PHP + PostgreSQL + PGroonga
   # src = images/php-document-search.png
   # relative_height = 100
 
-= 類似文書検索
+= 類似マニュアル検索
+
+TODO: 画像
+
+= 実現方法
+
+  * 類似検索用インデックスが必要
+    * 自然言語に合わせた処理で精度向上
+    * 日本語ならMeCabを活用
+  * 類似検索用の演算子を使う
+    * 類似検索クエリー\n
+      →対象マニュアルのテキスト全体
+    * 参考：全文検索クエリー\n
+      →キーワード
+
+= インデックス作成
+
+(('tag:center'))
+マイグレーションファイル作成
+
+  # coderay console
+
+  % php artisan \
+      make:migration \
+        add_similar_search_index
+
+= マイグレーション
+
+  # coderay php
+
+  public function up()
+  { // WITHを使っているのでDB::statementを使用
+    DB::statement(
+      "CREATE INDEX similar_search_index " .
+      "ON entries " .
+      // タイトルと内容を合わせたテキストをインデックス
+      // 理由1：タイトルも重要→対象に加えて精度向上
+      // 理由2：PostgreSQLが全文検索インデックスと
+      //        区別できるように
+      "USING pgroonga (id, (title || ' ' || content)) " .
+      // ポイント：MeCabを使う
+      "WITH (tokenizer='TokenMecab')");
+  }
+
+= 類似検索：スコープ
+
+  # coderay php
+
+  public function scopeSimilarSearch($query, $text)
+  {
+    return $query
+      ->select("id", "url", "title")
+      ->selectRaw("pgroonga_score(entries) AS score")
+      // インデックス定義と同じ式↓を指定すること！
+      //   title || ' ' || content
+      // &@*が類似検索の演算子
+      ->whereRaw("(title || ' ' || content) &@* ?",
+                 [$text])
+      ->orderBy("score", "DESC");
+  }
+
+= 類似検索：インスタンスメソッド
+
+  # coderay php
+
+  public function similarEntries()
+  {
+    return Entries::query()
+      // タイトルと内容がクエリー
+      ->similarSearch("{$this->title} {$this->content}")
+      // 自分自身を除くこと！
+      ->where("id", "<>", $this->id)
+      // 最も類似している3件のみ取得
+      ->limit(3)
+      ->get();
+  }
+
+= 類似検索：使い方
+
+  # coderay php
+
+  @foreach ($entries as $entry)
+    <ol> {{-- ↓マニュアル毎に類似文書検索 --}}
+    @foreach ($entry->similarEntries() as $similarEntry)
+      <li>
+        <a href="{{ $similarEntry->url }}">
+          {{ $similarEntry->title }}
+          <span class="score">{{ $similarEntry->score }}</span>
+        </a>
+      </li>
+    @endforeach
+    </ol>
+  @endforeach
+
+= 類似マニュアル検索
+
+TODO: 画像
 
 = 同義語展開
+
+TODO: 画像
+
+= 実現方法
+
+  * 同義語管理テーブルを作成
+  * 同義語を登録
+  * 同義語を展開して検索
+
+= モデル作成
+
+  # coderay console
+
+  % php artisan \
+      make:model \
+        --migration \
+        --controller \
+        --resource \
+        Synonym
+
+= マイグレーション：カラム
+
+  # coderay php
+
+  public function up() {
+    Schema::create('synonyms', function ($table) {
+      $table->increments('id');
+      $table->text('term');     // 展開対象の語
+      $table->text('synonym');  // 展開後の語
+      // 例：term: @, synonym: @
+      // 例：term: @, synonym: エラー制御演算子
+      //     「@」→「@ OR エラー制御演算子」
+      $table->timestamps();
+      // インデックス定義（後述）
+    });
+  }
+
+= マイグレーション\nインデックス
+
+  # coderay php
+
+  $table->index(
+    // termで完全一致できるようにする設定
+    [DB::raw(
+      "term pgroonga_text_term_search_ops_v2")],
+    null,
+    "pgroonga");
+
+= 同義語登録
+
+(('tag:center'))
+シーダー作成
+
+  # coderay console
+
+  % php artisan \
+      make:seeder \
+        SynonymsTableSeeder
+
+= シーダー
+
+  # coderay php
+
+  public function run()
+  {
+    $synonyms = [
+  // @そのもので検索させないならこれはいらない
+      ["term" => "@", "synonym" => "@"],
+      ["term" => "@",
+       // synonymでは演算子を使える
+       // ">": 重要度を上げる演算子
+       "synonym" => ">エラー制御演算子"],
+    ];
+    DB::table("synonyms")->insert($synonyms);
+  }
+
+= 動作確認
+
+  # coderay sql
+
+  SELECT pgroonga_query_expand(
+    'synonyms', -- テーブル名
+    'term', -- 展開対象語のカラム名
+    'synonym', -- 展開後の語のカラム名
+    '@'); -- 展開対象のクエリー
+  --     pgroonga_query_expand     
+  -- ------------------------------
+  --  ((@) OR (>エラー制御演算子))
+  -- (1 row)
+
+= 検索
+
+  # coderay php
+
+  whereRaw("title &@~ ? OR content &@~ ?",
+           [">({$search_query})", $search_query]);
+  // ↓クエリーをpgroonga_query_expand()で展開して利用
+  whereRaw(
+    "title &@~ pgroonga_query_expand(?, ?, ?, ?) OR " .
+    "content &@~ pgroonga_query_expand(?, ?, ?, ?)",
+    ["synonyms", "term", "synonym", ">({$search_query})",
+     "synonyms", "term", "synonym", $search_query]);
+
+= 同義語展開
+
+TODO: 画像
+
+= おさらい：基本機能
+
+  * 高速全文検索＋ソート
+  * 検索キーワードハイライト
+  * キーワード周辺テキスト表示
+
+= おさらい：高度な機能
+
+  * オートコンプリート
+    * ローマ字対応（seiki→正規表現）
+  * 類似マニュアル検索
+  * 同義語展開
+    * 「@」→「@ OR エラー制御演算子」
 
 = 開発者募集！
 
@@ -580,7 +797,7 @@ PHP + PostgreSQL + PGroonga
 = 使いたい！
 
   * WEICさんが運用予定！
-    * 月内リリース予定
+    * 2017年10月中にリリース予定
     * URL: http://phpdocs.weic.co.jp/
   * 宣伝(('note:（運用スポンサーの宣伝枠）'))
     * PHPエンジニア大募集！
@@ -595,9 +812,9 @@ PHP + PostgreSQL + PGroonga
 
 = まとめ
 
-  * PGroongaを使えば…
-    * 高速日本語全文検索サービスを…
-    * ((*PHP*))で簡単に作れる！
+  * PostgreSQL + PGroonga
+    * 高速日本語全文検索サービスを\n
+      ((*PHP*))で簡単に作れる！
   * 開発者募集！
   * サービス提供予定 by WEIC！
     * URL: http://phpdocs.weic.co.jp/
@@ -617,7 +834,6 @@ https://slide.rabbit-shocker.org/authors/kou/db-tech-showcase-tokyo-2017/
 
 = PHP+MySQL+Mroonga入門
 
-  * PHP+MySQL+Mroongaでも簡単！
   * Groongaではじめる全文検索
     * https://grnbook-ja.tumblr.com/
     * 著者：北市真
@@ -630,7 +846,7 @@ https://slide.rabbit-shocker.org/authors/kou/db-tech-showcase-tokyo-2017/
     * 例：PDO/LaravelのPostgreSQL関連
     * 例：マニュアル生成まわり
     * 例：PHP document search関連
-  * やりたいけど自分はムリそう…
+  * (('wait'))やりたいけど自分はムリそう…
     * そんなことはないんですよ！
 
 = OSS Gate
