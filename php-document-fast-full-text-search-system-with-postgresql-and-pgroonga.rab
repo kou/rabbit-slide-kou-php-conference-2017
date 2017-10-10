@@ -280,9 +280,9 @@ PHP + PostgreSQL + PGroonga
 
 = データ登録
 
-  (1) PHPのドキュメントを\n
+  (1) PHPのマニュアルを\n
       ローカルで生成
-      * PHPのドキュメントの作り方\n
+      * PHPのマニュアルの作り方\n
         http://doc.php.net/tutorial/
       * フィードバックチャンスが\n
         いろいろあったよ！
@@ -309,7 +309,7 @@ PHP + PostgreSQL + PGroonga
       $xpath = new \DOMXPath($document);
       $entry = new Entry();
       $entry->url = "/doc/" . basename($html_path);
-      // XPathでテキスト抽出
+      // XPathでテキスト抽出（詳細はソースを参照）
       $this->extract_title($entry, $xpath);
       $this->extract_content($entry, $xpath);
       $entry->save();
@@ -485,6 +485,46 @@ PHP + PostgreSQL + PGroonga
     // ※LaravelがWITHを未サポートなのでSQLで書いている
     // ※回避策なのでLaravelにWITHサポートを入れたい！
     "WITH (tokenizer='TokenBigramSplitSymbolAlphaDigit')");
+
+= データ登録
+
+  (1) マニュアルから候補を抽出\n
+      (('note:（手動作成はコスト高すぎ）'))
+      * 例：名詞は候補
+      * 例：連続した名詞→1つの候補に
+  (2) ヨミガナも自動で推測\n
+      (('note:（MeCabを利用）'))
+  (3) 候補をPostgreSQLに挿入
+
+= コマンド作成
+
+  # coderay console
+
+  % php artisan \
+      make:command \
+        --command=terms:register \
+        RegisterTerms
+
+= 登録コマンド実装（一部）
+
+  # coderay php
+
+  public function handle()
+  {
+    foreach (Entry::query()->cursor() as $entry) {
+      // processTextの実装はソースを参照
+      // タイトルから抽出
+      $this->processText($entry->title);
+      // 本文から抽出
+      $this->processText($entry->content);
+    }
+  }
+
+= 登録
+
+  # coderay console
+
+  % php artisan terms:register
 
 = 前方一致RK検索
 
